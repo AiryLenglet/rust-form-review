@@ -4,82 +4,76 @@ use std::cmp::PartialEq;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct CaseId(u64);
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-enum Status {
-    Review,
-    Scoring,
-    Completed,
-    Cancelled,
-}
+trait Status {}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+
+struct Review {}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct Scoring {}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct Completed {}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct Cancelled {}
+
+impl Status for Review {}
+impl Status for Scoring {}
+impl Status for Completed {}
+impl Status for Cancelled {}
 
 trait Form {
-    fn serialize(&self) -> Result<serde_json::Value, serde_json::Error>;
-}
-
-impl Form for FormData {
-    fn serialize(&self) -> Result<serde_json::Value, serde_json::Error> {
-        serde_json::to_value(self)
-    }
+    fn to_json(&self) -> Result<serde_json::Value, serde_json::Error>;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct FormData {
+struct FormData<Status = Scoring> {
     case_id: CaseId,
     status: Status,
 }
 
-trait ReviewForm: Form {
-    fn review_question(&mut self);
-    fn submit(self) -> SubmissionResult;
+impl<T> Form for FormData<T>
+where
+    T: Serialize,
+{
+    fn to_json(&self) -> Result<serde_json::Value, serde_json::Error> {
+        serde_json::to_value(self)
+    }
 }
-
-trait ScoringForm: Form {
-    fn score(self) -> impl ReviewForm;
-}
-
-trait EscalationForm: Form {}
-
-impl EscalationForm for FormData {}
-
-trait ClosedForm: Form {}
-
-impl ClosedForm for FormData {}
 
 enum SubmissionResult {
-    Escalation(Box<dyn EscalationForm>),
-    Closed(Box<dyn ClosedForm>),
+    Escalation(FormData<Review>),
+    Closed(FormData<Completed>),
 }
 
-impl ReviewForm for FormData {
+impl FormData<Review> {
     fn review_question(&mut self) {}
 
     fn submit(self) -> SubmissionResult {
         if self.case_id == CaseId(0) {
-            SubmissionResult::Closed(Box::new(FormData {
+            SubmissionResult::Closed(FormData {
                 case_id: self.case_id,
-                status: Status::Completed,
-            }))
+                status: Completed {},
+            })
         } else {
-            SubmissionResult::Escalation(Box::new(FormData {
+            SubmissionResult::Escalation(FormData {
                 case_id: self.case_id,
-                status: Status::Review,
-            }))
+                status: Review {},
+            })
         }
     }
 }
 
-impl ScoringForm for FormData {
-    fn score(self) -> impl ReviewForm {
+impl FormData<Scoring> {
+    fn score(self) -> FormData<Review> {
         FormData {
             case_id: self.case_id,
-            status: Status::Review,
+            status: Review {},
         }
     }
 }
 
 trait FormRepository {
-    fn find_review_case(&self, case_id: CaseId) -> Option<impl ReviewForm>;
-    fn find_score_case(&self, case_id: CaseId) -> Option<impl ScoringForm>;
+    fn find_review_case(&self, case_id: CaseId) -> Option<FormData<Review>>;
+    fn find_score_case(&self, case_id: CaseId) -> Option<FormData<Scoring>>;
 
     fn save(&self, form: &impl Form);
 }
@@ -87,33 +81,32 @@ trait FormRepository {
 struct ConnectionPool {}
 
 impl FormRepository for ConnectionPool {
-    fn find_review_case(&self, case_id: CaseId) -> Option<impl ReviewForm> {
+    fn find_review_case(&self, case_id: CaseId) -> Option<FormData<Review>> {
         let form = FormData {
             case_id,
-            status: Status::Review,
+            status: Review {},
         };
         Some(form)
     }
 
-    fn find_score_case(&self, case_id: CaseId) -> Option<impl ScoringForm> {
+    fn find_score_case(&self, case_id: CaseId) -> Option<FormData<Scoring>> {
         let form = FormData {
             case_id,
-            status: Status::Scoring,
+            status: Scoring {},
         };
         Some(form)
     }
 
     fn save(&self, form: &impl Form) {
-        let json = form.serialize().expect("could not serialize form");
+        let json = form.to_json().expect("could not serialize form");
         println!("{}", json);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::ReviewForm;
-    use super::ScoringForm;
-    use super::{CaseId, ConnectionPool, FormRepository, SubmissionResult};
+    use super::{CaseId, ConnectionPool, Form, FormRepository, SubmissionResult};
+    use serde::Serialize;
 
     #[test]
     fn test_score() {
@@ -135,12 +128,12 @@ mod tests {
         match review_form.submit() {
             SubmissionResult::Closed(f) => {
                 println!("closed form");
-                let s = f.serialize().expect("could not serialize form");
+                let s = f.to_json().expect("could not serialize form");
                 println!("{}", s);
             }
             SubmissionResult::Escalation(escalation) => println!(
                 "escalation form {}",
-                escalation.serialize().expect("could not serialize form")
+                escalation.to_json().expect("could not serialize form")
             ),
         }
     }
