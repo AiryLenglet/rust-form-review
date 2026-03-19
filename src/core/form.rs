@@ -4,21 +4,42 @@ use std::cmp::PartialEq;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct CaseId(u64);
 
-trait Status {}
+trait Status {
+    fn expected_type_tag() -> &'static str;
+}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-
+#[serde(tag = "type")]
 struct Review {}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type")]
 struct Scoring {}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type")]
 struct Completed {}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type")]
 struct Cancelled {}
 
-impl Status for Review {}
-impl Status for Scoring {}
-impl Status for Completed {}
-impl Status for Cancelled {}
+impl Status for Review {
+    fn expected_type_tag() -> &'static str {
+        "Review"
+    }
+}
+impl Status for Scoring {
+    fn expected_type_tag() -> &'static str {
+        "Scoring"
+    }
+}
+impl Status for Completed {
+    fn expected_type_tag() -> &'static str {
+        "Completed"
+    }
+}
+impl Status for Cancelled {
+    fn expected_type_tag() -> &'static str {
+        "Cancelled"
+    }
+}
 
 trait Form {
     fn to_json(&self) -> Result<serde_json::Value, serde_json::Error>;
@@ -103,10 +124,49 @@ impl FormRepository for ConnectionPool {
     }
 }
 
+#[derive(Debug)]
+struct FormError {
+    details: String,
+}
+
+impl From<serde_json::Error> for FormError {
+    fn from(error: serde_json::Error) -> Self {
+        Self {
+            details: format!("{}", error),
+        }
+    }
+}
+
+fn find<T>() -> Result<FormData<T>, FormError>
+where
+    T: Status + Deserialize<'static>,
+{
+    #[derive(Deserialize)]
+    struct S {
+        status: serde_json::Value,
+    }
+
+    let json = r#"{"case_id":1,"status":{"type":"Review"}}"#;
+    let temp: S = serde_json::from_str(json)?;
+
+    let received_type = temp.status.get("type")
+        .and_then(|v| v.as_str())
+        .expect("status must have a 'type' field");
+
+    let expected_type = T::expected_type_tag();
+
+    if received_type != expected_type {
+        return Err(FormError {
+            details: format!("unexpected type {}", received_type),
+        });
+    }
+    let form = serde_json::from_str::<FormData<T>>(json)?;
+    Ok(form)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{CaseId, ConnectionPool, Form, FormRepository, SubmissionResult};
-    use serde::Serialize;
+    use super::{find, CaseId, Completed, ConnectionPool, Form, FormRepository, Review, SubmissionResult};
 
     #[test]
     fn test_score() {
@@ -136,5 +196,12 @@ mod tests {
                 escalation.to_json().expect("could not serialize form")
             ),
         }
+    }
+
+    #[test]
+    fn test_deser() {
+        let u = find::<Review>();
+        println!("{:?}", u);
+        let u = find::<Completed>();
     }
 }
